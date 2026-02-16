@@ -35,6 +35,7 @@ class PeerWire {
         
         this.mqttClient = null;   // MQTT client instance for signaling
         this.pc = null;           // RTCPeerConnection instance
+        this.dataChannel = null;  // RTCDataChannel for text chat
         this.localStream = null;  // MediaStream from user's camera/mic
         this.remoteStream = new MediaStream(); // Stream container for the peer's video
         this.isInitiator = false; // Flag to determine who starts the WebRTC offer
@@ -47,6 +48,9 @@ class PeerWire {
         this.statusIndicator = document.getElementById('status-indicator');
         this.roomDisplay = document.getElementById('room-id');
         this.landingOverlay = document.getElementById('landing-overlay');
+        this.chatMessages = document.getElementById('chat-messages');
+        this.chatInput = document.getElementById('chat-input');
+        this.sendBtn = document.getElementById('send-btn');
 
         // Start the application
         this.init();
@@ -211,6 +215,18 @@ class PeerWire {
 
         this.pc = new RTCPeerConnection(CONFIG.rtc);
 
+        // Initiator creates the data channel
+        if (this.isInitiator) {
+            this.dataChannel = this.pc.createDataChannel('chat');
+            this.setupDataChannel(this.dataChannel);
+        } else {
+            // Receiver listens for the data channel
+            this.pc.ondatachannel = (event) => {
+                this.dataChannel = event.channel;
+                this.setupDataChannel(this.dataChannel);
+            };
+        }
+
         // Add our local tracks (video/audio) to the connection
         this.localStream.getTracks().forEach(track => {
             this.pc.addTrack(track, this.localStream);
@@ -242,6 +258,60 @@ class PeerWire {
                 this.updateStatus('disconnected', 'Peer disconnected');
             }
         };
+    }
+
+    /**
+     * Binds events to the RTCDataChannel.
+     * @param {RTCDataChannel} channel 
+     */
+    setupDataChannel(channel) {
+        channel.onopen = () => {
+            console.log("Data channel opened");
+            this.appendMessage('System', 'Chat connected', false, true);
+        };
+        channel.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            this.appendMessage('Peer', data.text, false);
+        };
+        channel.onclose = () => {
+            console.log("Data channel closed");
+            this.appendMessage('System', 'Chat disconnected', false, true);
+        };
+    }
+
+    /**
+     * Sends a text message through the data channel.
+     */
+    sendMessage() {
+        const text = this.chatInput.value.trim();
+        if (text && this.dataChannel && this.dataChannel.readyState === 'open') {
+            const message = { text, timestamp: Date.now() };
+            this.dataChannel.send(JSON.stringify(message));
+            this.appendMessage('Me', text, true);
+            this.chatInput.value = '';
+        }
+    }
+
+    /**
+     * Displays a message in the chat UI.
+     * @param {string} sender - Who sent the message
+     * @param {string} text - Message content
+     * @param {boolean} isLocal - Whether we sent it
+     * @param {boolean} isSystem - Whether it's a system message
+     */
+    appendMessage(sender, text, isLocal, isSystem = false) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isLocal ? 'local' : 'remote'} ${isSystem ? 'system' : ''}`;
+        
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        messageDiv.innerHTML = `
+            ${text}
+            <span class="meta">${sender} • ${timestamp}</span>
+        `;
+        
+        this.chatMessages.appendChild(messageDiv);
+        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
 
     /**
@@ -309,6 +379,14 @@ class PeerWire {
         document.getElementById('hangup').onclick = () => {
             window.location.hash = ''; // Clear room from URL
             window.location.reload(); // Refresh to go back to landing
+        };
+
+        // Chat UI bindings
+        this.sendBtn.onclick = () => this.sendMessage();
+        this.chatInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                this.sendMessage();
+            }
         };
     }
 }
